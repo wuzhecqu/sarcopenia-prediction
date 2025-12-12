@@ -79,19 +79,18 @@ model, scaler, encoders, median_dict, mode_dict, explainer, shap_values_val = lo
 
 # ===================== 3. 验证集加载（修复预处理逻辑） =====================
 @st.cache_data
+@st.cache_data
 def load_val_data():
-    """加载并预处理验证集"""
-    # 检查验证集文件
-    if not os.path.exists(VAL_DATA_PATH):
-        st.error(f"❌ 验证集文件不存在！路径：{VAL_DATA_PATH}")
-        st.stop()
-
-    # 读取原始数据
-    val_df = pd.read_excel(VAL_DATA_PATH, header=0, engine='openpyxl')
-    # 分离特征和标签
-    X_val = val_df.iloc[:, 1:27].copy()  # 必须copy()避免SettingWithCopyWarning
-    y_val = val_df.iloc[:, 0].copy()
-
+    try:
+        val_df = pd.read_excel(VAL_DATA_PATH, header=0, engine='openpyxl')
+        X_val = val_df.iloc[:, 1:27].copy()
+        y_val = val_df.iloc[:, 0].copy()
+        # ... 其他预处理 ...
+        return val_df, X_val, y_val, numeric_cols, categorical_cols
+    except Exception as e:
+        st.error(f"验证集加载失败：{str(e)}")
+        st.stop()  # 加载失败则终止，避免变量未定义
+        
     # 区分特征类型
     numeric_cols = X_val.select_dtypes(include=['int64', 'float64']).columns
     categorical_cols = X_val.select_dtypes(include=['object', 'category']).columns
@@ -414,4 +413,5 @@ elif function_choice == "📈 可解释性分析":
 
 # ===================== 9. 页脚 =====================
 st.markdown("---")
+
 st.markdown("© 2025 肌少症预测模型 - Streamlit网页版 | 基于XGBoost + SHAP可解释性分析")

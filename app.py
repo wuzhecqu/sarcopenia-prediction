@@ -80,46 +80,62 @@ model, scaler, encoders, median_dict, mode_dict, explainer, shap_values_val = lo
 # ===================== 3. 验证集加载（修复预处理逻辑） =====================
 @st.cache_data
 @st.cache_data
+@st.cache_data
 def load_val_data():
+    """修复变量未赋值问题，确保所有返回值都有定义"""
+    # 关键修复1：提前初始化所有返回变量（无论是否报错，都有默认值）
+    val_df = None
+    X_val = None
+    y_val = None
+    numeric_cols = []  # 初始化为空列表
+    categorical_cols = []  # 初始化为空列表
+
     try:
+        # 检查文件是否存在
+        if not os.path.exists(VAL_DATA_PATH):
+            st.error(f"验证集文件不存在：{VAL_DATA_PATH}")
+            return val_df, X_val, y_val, numeric_cols, categorical_cols
+        
+        # 读取验证集（兼容不同编码/格式）
         val_df = pd.read_excel(VAL_DATA_PATH, header=0, engine='openpyxl')
+        
+        # 关键修复2：检查列数，避免iloc[:,1:27]超出范围
+        if val_df.shape[1] < 27:
+            st.error(f"验证集列数不足！当前列数：{val_df.shape[1]}，要求至少27列（1列标签+26列特征）")
+            return val_df, X_val, y_val, numeric_cols, categorical_cols
+        
+        # 分离特征和标签（copy避免SettingWithCopyWarning）
         X_val = val_df.iloc[:, 1:27].copy()
         y_val = val_df.iloc[:, 0].copy()
-        # ... 其他预处理 ...
-        return val_df, X_val, y_val, numeric_cols, categorical_cols
-    except Exception as e:
-        st.error(f"验证集加载失败：{str(e)}")
-        st.stop()  # 加载失败则终止，避免变量未定义
         
-    # 区分特征类型
-    numeric_cols = X_val.select_dtypes(include=['int64', 'float64']).columns
-    categorical_cols = X_val.select_dtypes(include=['object', 'category']).columns
+        # 定义特征类型（此时变量必有值）
+        numeric_cols = X_val.select_dtypes(include=['int64', 'float64']).columns.tolist()
+        categorical_cols = X_val.select_dtypes(include=['object', 'category']).columns.tolist()
+        
+        # 预处理（兼容空列表）
+        if len(numeric_cols) > 0:
+            for col in numeric_cols:
+                X_val[col].fillna(median_dict.get(col, 0), inplace=True)
+        if len(categorical_cols) > 0:
+            for col in categorical_cols:
+                X_val[col].fillna(mode_dict.get(col, 0), inplace=True)
+                if col in encoders:
+                    # 强制转字符串，避免类型错误
+                    X_val[col] = X_val[col].astype(str)
+                    X_val[col] = encoders[col].transform(X_val[col])
+        
+        # 标准化（兼容空列表）
+        if len(numeric_cols) > 0:
+            X_val[numeric_cols] = scaler.transform(X_val[numeric_cols])
+        
+        st.success("✅ 验证集加载成功！")
+        return val_df, X_val, y_val, numeric_cols, categorical_cols
 
-    # 预处理（严格匹配训练逻辑）
-    # 1. 缺失值填充
-    for col in numeric_cols:
-        if col in median_dict:
-            X_val[col].fillna(median_dict[col], inplace=True)
-    # app.py中单样本预测/批量预测的类别特征处理部分（添加astype(str)）
-    # 示例：单样本预测中
-    for col in categorical_cols:
-        input_data[col] = st.selectbox(f"{col}", val_df_ori[col].astype(str).unique())
-
-    # 预处理时（关键）
-    input_df = pd.DataFrame([input_data])
-    for col in categorical_cols:
-        # 强制转字符串 + 处理未见过的类别
-        input_df_col = input_df[col].astype(str).fillna("unknown")
-        # 兼容编码器未见过的类别（替换为0）
-        try:
-            input_df[col] = encoders[col].transform(input_df_col)
-        except:
-            input_df[col] = 0  # 未见过的类别默认值
-
-    # 3. 数值特征标准化
-    X_val[numeric_cols] = scaler.transform(X_val[numeric_cols])
-
-    return val_df, X_val, y_val, numeric_cols, categorical_cols
+    except Exception as e:
+        # 捕获所有异常，确保返回变量有值
+        st.error(f"验证集加载失败：{str(e)}")
+        # 返回初始化后的默认值（避免变量未赋值）
+        return val_df, X_val, y_val, numeric_cols, categorical_cols
 
 
 # 加载验证集+特征类型
@@ -263,4 +279,5 @@ elif function_choice == "🔮 单样本预测":
 st.markdown("---")
 
 st.markdown("© 2025 肌少症预测模型 - Streamlit网页版 | 基于XGBoost + SHAP可解释性分析")
+
 

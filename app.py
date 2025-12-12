@@ -139,7 +139,25 @@ def load_val_data():
 
 
 # 加载验证集+特征类型
+# 加载验证集（仅当模型加载成功时执行）
 val_df_ori, X_val, y_val, numeric_cols, categorical_cols = load_val_data()
+
+# 关键修复：补充全局边界检查，避免空列表导致后续报错
+# 初始化默认特征列表（防止为空）
+if len(numeric_cols) == 0:
+    st.warning("⚠️ 未检测到数值特征，使用默认空列表！")
+    numeric_cols = []
+if len(categorical_cols) == 0:
+    st.warning("⚠️ 未检测到类别特征，使用默认空列表！")
+    categorical_cols = []
+
+# 补充X_val/y_val的默认值，避免后续预测报错
+if X_val is None:
+    X_val = pd.DataFrame()  # 空DataFrame
+if y_val is None:
+    y_val = pd.Series()     # 空Series
+
+
 
 # ===================== 4. 侧边栏功能选择 =====================
 st.sidebar.title("功能菜单")
@@ -279,5 +297,6 @@ elif function_choice == "🔮 单样本预测":
 st.markdown("---")
 
 st.markdown("© 2025 肌少症预测模型 - Streamlit网页版 | 基于XGBoost + SHAP可解释性分析")
+
 
 

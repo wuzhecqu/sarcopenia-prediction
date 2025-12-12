@@ -185,233 +185,82 @@ if function_choice == "📊 模型评估结果":
     ax.legend(loc="lower right")
     st.pyplot(fig)
 
-# ===================== 6. 单样本预测页面（修复特征输入） =====================
+
+# -------------------- 5.2 单样本预测 --------------------
 elif function_choice == "🔮 单样本预测":
     st.title("肌少症单样本预测")
-    st.markdown("### 输入患者特征")
-
-    # 构建输入表单
+    st.subheader("输入患者特征")
+    
+    # 关键修复1：提前初始化input_data（空字典），避免未定义
     input_data = {}
-    col1, col2 = st.columns(2)
-
-    # 数值特征输入
-    with col1:
-        st.subheader("数值特征")
-        for col in numeric_cols:
-            # 安全获取统计值（避免空值）
-            min_val = float(val_df_ori[col].min()) if not val_df_ori[col].isna().all() else 0.0
-            max_val = float(val_df_ori[col].max()) if not val_df_ori[col].isna().all() else 100.0
-            mean_val = float(val_df_ori[col].median()) if not val_df_ori[col].isna().all() else 50.0
-
-            input_data[col] = st.number_input(
-                f"{col}",
-                min_value=min_val,
-                max_value=max_val,
-                value=mean_val,
-                step=0.1
-            )
-
-    # 类别特征输入
-    with col2:
-        st.subheader("类别特征")
-        for col in categorical_cols:
-            # 安全获取唯一值
-            unique_vals = val_df_ori[col].dropna().unique() if col in val_df_ori.columns else []
-            if len(unique_vals) == 0:
-                unique_vals = ["未知"]
-            input_data[col] = st.selectbox(f"{col}", unique_vals)
-
-    # 预测按钮
-    if st.button("🚀 开始预测"):
-        # 转换为DataFrame
+    
+    # 关键修复2：补充边界条件，避免categorical_cols/numeric_cols为空
+    if len(numeric_cols) == 0:
+        st.warning("⚠️ 未检测到数值特征，请检查验证集数据！")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            # 只遍历存在的数值特征，避免空循环
+            for col in numeric_cols[:13]:
+                # 关键修复3：兼容val_df_ori为空的情况
+                default_val = 0.0 if val_df_ori is None else float(val_df_ori[col].median())
+                input_data[col] = st.number_input(f"{col}", value=default_val)
+        with col2:
+            # 剩余数值特征
+            for col in numeric_cols[13:]:
+                default_val = 0.0 if val_df_ori is None else float(val_df_ori[col].median())
+                input_data[col] = st.number_input(f"{col}", value=default_val)
+            
+            # 关键修复4：兼容categorical_cols为空的情况
+            if len(categorical_cols) > 0:
+                for col in categorical_cols:
+                    # 兼容val_df_ori为空/特征无唯一值的情况
+                    if val_df_ori is None or col not in val_df_ori.columns:
+                        input_data[col] = st.selectbox(f"{col}", ["未知"])
+                    else:
+                        # 强制转字符串，避免类型错误
+                        unique_vals = val_df_ori[col].astype(str).unique()
+                        input_data[col] = st.selectbox(f"{col}", unique_vals)
+    
+    # 预测按钮（关键修复5：只有input_data非空时才执行预测）
+    if st.button("🚀 开始预测") and len(input_data) > 0:
+        # 预处理
         input_df = pd.DataFrame([input_data])
-
-        # 预处理（兼容缺失值）
-        for col in numeric_cols:
-            input_df[col].fillna(0.0, inplace=True)
-        for col in categorical_cols:
-            input_df[col].fillna(unique_vals[0], inplace=True)
-
-        # 编码
-        for col in categorical_cols:
-            if col in encoders:
+        # 兼容categorical_cols为空
+        if len(categorical_cols) > 0:
+            for col in categorical_cols:
+                # 强制转字符串 + 处理未见过的类别
+                input_df_col = input_df[col].astype(str).fillna("unknown")
                 try:
-                    # 处理未见过的类别
-                    input_df[col] = encoders[col].transform(input_df[col])
+                    input_df[col] = encoders[col].transform(input_df_col)
                 except:
-                    input_df[col] = 0
-
-        # 标准化
-        input_df[numeric_cols] = scaler.transform(input_df[numeric_cols])
-
+                    input_df[col] = 0  # 未见过的类别默认值
+        
+        # 标准化数值特征（兼容numeric_cols为空）
+        if len(numeric_cols) > 0:
+            input_df[numeric_cols] = scaler.transform(input_df[numeric_cols])
+        
         # 预测
         pred_proba = model.predict_proba(input_df)[0, 1]
         pred_label = 1 if pred_proba >= 0.5 else 0
         pred_text = "有肌少症" if pred_label == 1 else "无肌少症"
-
+        
         # 展示结果
-        st.markdown("### 预测结果")
+        st.subheader("预测结果")
         col1, col2 = st.columns(2)
         with col1:
             st.metric("预测类别", pred_text)
             st.metric("肌少症概率", f"{pred_proba:.4f}")
         with col2:
-            # SHAP解释（兼容缺失的explainer）
             if explainer is not None:
-                st.markdown("#### 特征影响解释")
+                st.subheader("特征影响解释")
                 shap_val = explainer.shap_values(input_df)
                 fig, ax = plt.subplots(figsize=(10, 4))
-                shap.force_plot(
-                    explainer.expected_value,
-                    shap_val[0],
-                    input_data,
-                    matplotlib=True,
-                    show=False,
-                    figsize=(10, 4),
-                    ax=ax
-                )
+                shap.force_plot(explainer.expected_value, shap_val[0], input_data, matplotlib=True, show=False, ax=ax)
                 st.pyplot(fig)
-            else:
-                st.warning("⚠️ SHAP解释器未加载，无法展示特征影响（请重新训练模型并保存SHAP组件）")
-
-# ===================== 7. 批量预测页面（修复数据处理） =====================
-elif function_choice == "📤 批量预测":
-    st.title("肌少症批量预测")
-    st.markdown("### 上传待预测数据（Excel格式）")
-    st.markdown("⚠️ 数据格式要求：第一行是特征名，列顺序与训练集一致（无标签列）")
-
-    # 文件上传
-    uploaded_file = st.file_uploader("选择Excel文件", type=["xlsx"])
-    if uploaded_file is not None:
-        # 读取上传数据
-        test_df = pd.read_excel(uploaded_file, header=0, engine='openpyxl')
-        st.write(f"上传数据样本量：{len(test_df)}例，特征数：{test_df.shape[1]}")
-
-        # 预处理
-        X_test = test_df.copy()
-
-        # 缺失值填充
-        for col in numeric_cols:
-            if col in X_test.columns and col in median_dict:
-                X_test[col].fillna(median_dict[col], inplace=True)
-        for col in categorical_cols:
-            if col in X_test.columns and col in mode_dict:
-                X_test[col].fillna(mode_dict[col], inplace=True)
-
-        # 编码
-        for col in categorical_cols:
-            if col in X_test.columns and col in encoders:
-                try:
-                    X_test[col] = encoders[col].transform(X_test[col])
-                except:
-                    X_test[col] = 0
-
-        # 标准化
-        for col in numeric_cols:
-            if col in X_test.columns:
-                X_test[col] = scaler.transform(X_test[col].values.reshape(-1, 1))
-
-        # 批量预测
-        if st.button("🚀 批量预测"):
-            pred_proba = model.predict_proba(X_test)[:, 1]
-            pred_label = (pred_proba >= 0.5).astype(int)
-            # 结果整合
-            result_df = test_df.copy()
-            result_df["肌少症预测概率"] = pred_proba
-            result_df["肌少症预测标签"] = pred_label
-            result_df["肌少症预测结果"] = result_df["肌少症预测标签"].map({0: "无肌少症", 1: "有肌少症"})
-
-            # 展示结果
-            st.markdown("### 预测结果")
-            st.dataframe(result_df.head(10))
-
-            # 下载结果（兼容中文）
-            csv_data = result_df.to_csv(index=False, encoding='utf-8-sig')
-            st.download_button(
-                label="📥 下载预测结果（CSV）",
-                data=csv_data,
-                file_name="肌少症预测结果.csv",
-                mime="text/csv"
-            )
-
-# ===================== 8. 可解释性分析页面（兼容SHAP缺失） =====================
-elif function_choice == "📈 可解释性分析":
-    st.title("模型可解释性分析（SHAP）")
-
-    # 检查SHAP组件
-    if explainer is None or shap_values_val is None:
-        st.warning("⚠️ SHAP组件未加载！请重新运行训练代码并保存SHAP解释器和SHAP值")
-    else:
-        tab1, tab2, tab3 = st.tabs(["📊 SHAP汇总图", "🔍 特征依赖图", "🧬 单样本解释"])
-
-        # Tab1: SHAP汇总图
-        with tab1:
-            st.markdown("### 验证集SHAP特征影响汇总图")
-            st.markdown("""
-            - 纵轴：特征重要性（从上到下影响越大）
-            - 横轴：SHAP值（正值=增加肌少症概率，负值=降低）
-            - 颜色：特征取值（红色=高值，蓝色=低值）
-            """)
-            fig, ax = plt.subplots(figsize=(12, 8))
-            shap.summary_plot(
-                shap_values_val, X_val,
-                feature_names=X_val.columns,
-                plot_type="dot",
-                show=False,
-                ax=ax,
-                cmap=plt.get_cmap("coolwarm")
-            )
-            st.pyplot(fig)
-
-        # Tab2: 特征依赖图
-        with tab2:
-            st.markdown("### 特征依赖图（Top5特征）")
-            # 计算Top5特征
-            shap_importance = np.abs(shap_values_val).mean(axis=0)
-            top5_feat = X_val.columns[np.argsort(shap_importance)[-5:]][::-1]
-            selected_feat = st.selectbox("选择特征", top5_feat)
-
-            fig, ax = plt.subplots(figsize=(8, 6))
-            shap.dependence_plot(
-                selected_feat,
-                shap_values_val,
-                X_val,
-                feature_names=X_val.columns,
-                show=False,
-                ax=ax,
-                alpha=0.6,
-                dot_size=20
-            )
-            ax.set_title(f"特征依赖图 - {selected_feat}")
-            st.pyplot(fig)
-
-        # Tab3: 单样本解释
-        with tab3:
-            st.markdown("### 验证集单样本SHAP解释")
-            # 选择样本
-            sample_idx = st.slider("选择验证集样本索引", 0, len(X_val) - 1, 100)
-            # 展示样本信息
-            st.markdown("#### 样本特征")
-            sample_data = val_df_ori.iloc[sample_idx]
-            st.write(sample_data.iloc[:27])
-
-            # 展示SHAP力图
-            st.markdown("#### 特征影响解释")
-            fig, ax = plt.subplots(figsize=(12, 4))
-            shap.force_plot(
-                explainer.expected_value,
-                shap_values_val[sample_idx],
-                X_val.iloc[sample_idx],
-                feature_names=X_val.columns,
-                matplotlib=True,
-                show=False,
-                figsize=(12, 4),
-                ax=ax
-            )
-            ax.set_title(f"样本{sample_idx} - 真实标签：{'有肌少症' if y_val.iloc[sample_idx] == 1 else '无肌少症'}")
-            st.pyplot(fig)
 
 # ===================== 9. 页脚 =====================
 st.markdown("---")
 
 st.markdown("© 2025 肌少症预测模型 - Streamlit网页版 | 基于XGBoost + SHAP可解释性分析")
+

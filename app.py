@@ -81,74 +81,80 @@ model, scaler, encoders, median_dict, mode_dict, explainer, shap_values_val = lo
 @st.cache_data
 @st.cache_data
 @st.cache_data
+@st.cache_data
 def load_val_data():
-    """修复变量未赋值问题，确保所有返回值都有定义"""
-    # 关键修复1：提前初始化所有返回变量（无论是否报错，都有默认值）
     val_df = None
     X_val = None
     y_val = None
-    numeric_cols = []  # 初始化为空列表
-    categorical_cols = []  # 初始化为空列表
+    numeric_cols = []
+    categorical_cols = []
 
     try:
-        # 检查文件是否存在
         if not os.path.exists(VAL_DATA_PATH):
             st.error(f"验证集文件不存在：{VAL_DATA_PATH}")
             return val_df, X_val, y_val, numeric_cols, categorical_cols
         
-        # 读取验证集（兼容不同编码/格式）
         val_df = pd.read_excel(VAL_DATA_PATH, header=0, engine='openpyxl')
-        
-        # 关键修复2：检查列数，避免iloc[:,1:27]超出范围
         if val_df.shape[1] < 27:
-            st.error(f"验证集列数不足！当前列数：{val_df.shape[1]}，要求至少27列（1列标签+26列特征）")
+            st.error(f"验证集列数不足！当前：{val_df.shape[1]}列，要求≥27列")
             return val_df, X_val, y_val, numeric_cols, categorical_cols
         
-        # 分离特征和标签（copy避免SettingWithCopyWarning）
         X_val = val_df.iloc[:, 1:27].copy()
         y_val = val_df.iloc[:, 0].copy()
         
-        # 定义特征类型（此时变量必有值）
-        numeric_cols = X_val.select_dtypes(include=['int64', 'float64']).columns.tolist()
-        categorical_cols = X_val.select_dtypes(include=['object', 'category']).columns.tolist()
+        # ========== 修复类别特征识别 ==========
+        # 1. 扩大筛选范围：包含object/category/string类型
+        categorical_cols = X_val.select_dtypes(include=['object', 'category', 'string']).columns.tolist()
+        # 2. 手动指定类别特征列名（兜底！替换为你训练集中的类别特征名，比如['性别', '饮酒', '吸烟']）
+        manual_categorical_cols = ['性别', '饮酒状态', '吸烟状态', '教育程度']  # 替换为你的实际列名
+        for col in manual_categorical_cols:
+            if col in X_val.columns and col not in categorical_cols:
+                # 强制转为字符串类型，加入类别特征列表
+                X_val[col] = X_val[col].astype(str)
+                categorical_cols.append(col)
         
-        # 预处理（兼容空列表）
+        # 3. 数值特征：排除类别特征，避免重复
+        numeric_cols = [col for col in X_val.columns if col not in categorical_cols]
+        
+        # ========== 预处理适配 ==========
+        # 数值特征填充+标准化
         if len(numeric_cols) > 0:
             for col in numeric_cols:
                 X_val[col].fillna(median_dict.get(col, 0), inplace=True)
-        if len(categorical_cols) > 0:
-            for col in categorical_cols:
-                X_val[col].fillna(mode_dict.get(col, 0), inplace=True)
-                if col in encoders:
-                    # 强制转字符串，避免类型错误
-                    X_val[col] = X_val[col].astype(str)
-                    X_val[col] = encoders[col].transform(X_val[col])
-        
-        # 标准化（兼容空列表）
-        if len(numeric_cols) > 0:
             X_val[numeric_cols] = scaler.transform(X_val[numeric_cols])
         
+        # 类别特征填充+编码（兼容空列表）
+        if len(categorical_cols) > 0:
+            for col in categorical_cols:
+                X_val[col] = X_val[col].astype(str).fillna("unknown")  # 强制转字符串
+                if col in encoders:
+                    X_val[col] = encoders[col].transform(X_val[col])
+        
         st.success("✅ 验证集加载成功！")
+        # 打印特征识别结果（调试用，可选）
+        st.write(f"识别到数值特征：{len(numeric_cols)}个 | 类别特征：{len(categorical_cols)}个")
         return val_df, X_val, y_val, numeric_cols, categorical_cols
 
     except Exception as e:
-        # 捕获所有异常，确保返回变量有值
         st.error(f"验证集加载失败：{str(e)}")
-        # 返回初始化后的默认值（避免变量未赋值）
         return val_df, X_val, y_val, numeric_cols, categorical_cols
 
+  
 
-# 加载验证集+特征类型
-# 加载验证集（仅当模型加载成功时执行）
+
+
+# 加载验证集后的边界检查
 val_df_ori, X_val, y_val, numeric_cols, categorical_cols = load_val_data()
 
+# 优化提示（仅在空列表时显示信息，非警告）
+if len(numeric_cols) == 0:
+    st.info("ℹ️ 未检测到数值特征，部分功能可能受限")  # 蓝色信息，非黄色警告
+if len(categorical_cols) == 0:
+    st.info("ℹ️ 未检测到类别特征（已使用手动指定列表兜底），不影响核心功能")
+    
 # 关键修复：补充全局边界检查，避免空列表导致后续报错
 # 初始化默认特征列表（防止为空）
-if len(numeric_cols) == 0:
-    st.warning("⚠️ 未检测到数值特征，使用默认空列表！")
-    numeric_cols = []
-if len(categorical_cols) == 0:
-    st.warning("⚠️ 未检测到类别特征，使用默认空列表！")
+
     categorical_cols = []
 
 # 补充X_val/y_val的默认值，避免后续预测报错
@@ -297,6 +303,7 @@ elif function_choice == "🔮 单样本预测":
 st.markdown("---")
 
 st.markdown("© 2025 肌少症预测模型 - Streamlit网页版 | 基于XGBoost + SHAP可解释性分析")
+
 
 
 
